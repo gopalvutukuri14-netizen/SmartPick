@@ -7,16 +7,37 @@ modifying ChromaDB, embeddings, or ranking weights.
 
 from typing import Optional, Any
 from pathlib import Path
+from collections import OrderedDict
 import json
 import logging
+import threading
 import pyarrow.dataset as ds
 
 logger = logging.getLogger(__name__)
 
 DATA_PATH = Path("data/products_master.parquet")
 
-# In-memory cache to avoid repeated parquet scans for frequent/recent ASINs
-_IMAGE_CACHE: dict[str, Optional[str]] = {}
+# Thread-safe bounded LRU cache to avoid repeated parquet scans and unbounded RAM growth
+_MAX_IMAGE_CACHE_SIZE = 2_000
+_IMAGE_CACHE_LOCK = threading.Lock()
+_IMAGE_CACHE: OrderedDict[str, Optional[str]] = OrderedDict()
+
+
+def _cache_get(asin: str) -> tuple[bool, Optional[str]]:
+    with _IMAGE_CACHE_LOCK:
+        if asin in _IMAGE_CACHE:
+            _IMAGE_CACHE.move_to_end(asin)
+            return True, _IMAGE_CACHE[asin]
+        return False, None
+
+
+def _cache_set(asin: str, url: Optional[str]) -> None:
+    with _IMAGE_CACHE_LOCK:
+        if asin in _IMAGE_CACHE:
+            _IMAGE_CACHE.move_to_end(asin)
+        elif len(_IMAGE_CACHE) >= _MAX_IMAGE_CACHE_SIZE:
+            _IMAGE_CACHE.popitem(last=False)
+        _IMAGE_CACHE[asin] = url
 
 
 def parse_image_url(images_raw: Any) -> Optional[str]:
@@ -72,8 +93,9 @@ def get_product_images(asins: list[str]) -> dict[str, Optional[str]]:
     missing_asins = []
 
     for asin in asins:
-        if asin in _IMAGE_CACHE:
-            result[asin] = _IMAGE_CACHE[asin]
+        hit, cached_url = _cache_get(asin)
+        if hit:
+            result[asin] = cached_url
         else:
             missing_asins.append(asin)
 
@@ -87,7 +109,7 @@ def get_product_images(asins: list[str]) -> dict[str, Optional[str]]:
         )
         for asin in missing_asins:
             result[asin] = None
-            _IMAGE_CACHE[asin] = None
+            _cache_set(asin, None)
         return result
 
     try:
@@ -109,13 +131,13 @@ def get_product_images(asins: list[str]) -> dict[str, Optional[str]]:
         for asin in missing_asins:
             img_url = mapping.get(asin)
             result[asin] = img_url
-            _IMAGE_CACHE[asin] = img_url
+            _cache_set(asin, img_url)
 
     except Exception as exc:
         logger.error("Failed to query product images from parquet: %s", exc)
         for asin in missing_asins:
             result[asin] = None
-            _IMAGE_CACHE[asin] = None
+            _cache_set(asin, None)
 
     return result
 

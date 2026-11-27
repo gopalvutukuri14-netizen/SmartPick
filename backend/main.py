@@ -1,14 +1,56 @@
+import os
 from typing import Optional
 import logging
-from fastapi import FastAPI, HTTPException, Depends
+from pathlib import Path
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from backend.orchestrator import run_pipeline
 from backend.auth import auth_router, get_current_user_optional
 from backend.database.models import User
+from backend.rate_limit import (
+    enforce_rate_limit,
+    get_client_ip,
+    recommend_limit_per_min,
+)
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(ROOT_DIR / ".env")
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_CORS_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+
+def parse_cors_origins(raw_origins: Optional[str] = None) -> list[str]:
+    """
+    Parse and normalize CORS_ORIGINS from a comma-separated environment string.
+    Rejects wildcard '*' when credentials are enabled.
+    """
+    raw = os.getenv("CORS_ORIGINS", "") if raw_origins is None else raw_origins
+    if not raw or not raw.strip():
+        return list(_DEFAULT_CORS_ORIGINS)
+
+    origins: list[str] = []
+    for item in raw.split(","):
+        normalized = item.strip().rstrip("/")
+        if not normalized:
+            continue
+        if normalized == "*":
+            raise ValueError(
+                "Wildcard '*' is not permitted in CORS_ORIGINS when allow_credentials=True."
+            )
+        if not (normalized.startswith("http://") or normalized.startswith("https://")):
+            raise ValueError(
+                f"Invalid CORS origin '{normalized}'. Origins must start with http:// or https://."
+            )
+        if normalized not in origins:
+            origins.append(normalized)
+
+    return origins or list(_DEFAULT_CORS_ORIGINS)
+
 
 app = FastAPI(
     title="SmartPick",
@@ -16,13 +58,13 @@ app = FastAPI(
     version="1.1.0",
 )
 
-# Allow the React dev server to call the API
+# Allow configured frontend origins to call the API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=parse_cors_origins(),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 # Include Authentication Router
@@ -91,6 +133,7 @@ def understand_query(request: QueryRequest):
 @app.post("/recommend")
 def recommend(
     request: RecommendRequest,
+    http_request: Request,
     current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """
@@ -102,6 +145,18 @@ def recommend(
     """
     # Derive identity securely from authenticated token if logged in
     effective_user_id = current_user.id if current_user else request.user_id
+
+    rate_identifier = (
+        f"user:{current_user.id}"
+        if current_user
+        else f"ip:{get_client_ip(http_request)}"
+    )
+    enforce_rate_limit(
+        scope="recommend",
+        identifier=rate_identifier,
+        limit=recommend_limit_per_min(),
+        window_seconds=60,
+    )
 
     import time
     t0 = time.perf_counter()

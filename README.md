@@ -91,14 +91,14 @@ User Query + User ID / Token + Context (Previous Products) + Category Context
 
 | Layer | Technology |
 |---|---|
-| **LLM** | Google Gemini (`gemini-2.5-flash` / `gemini-3.5-flash-lite`) with automated exponential backoff |
+| **LLM** | Google Gemini (`gemini-3.5-flash-lite`) with automated exponential backoff |
 | **Agent Orchestration** | LangGraph (`StateGraph`) |
-| **Dense Embeddings** | BAAI/bge-m3 (`FlagEmbedding`) |
-| **Vector Store** | ChromaDB (`retail_products` collection, 250,000+ products) |
+| **Dense Embeddings** | BAAI/bge-m3 (`FlagEmbedding`, 1024-dim) |
+| **Vector Store** | ChromaDB (`retail_products` collection, 250,000 products) |
 | **Cloud Database** | Neon PostgreSQL (`users`, `user_preferences`, `conversation_memory`, `otp_challenges`) |
 | **Authentication & Email** | JWT (HS256) + Argon2id + Brevo Transactional Email API (6-digit OTP verification) |
-| **Catalog & Images** | Master Parquet catalog (`data/products_master.parquet`) + cached URL lookup |
-| **Sentiment Analysis** | VADER + aspect-level customer sentiment extraction |
+| **Catalog & Images** | Historical Amazon catalog (`data/products_master.parquet`, 250,000 products, 1,574,479 reviews) + bounded cached URL lookup (prices/availability are historical, not live) |
+| **Sentiment Analysis** | `vaderSentiment` + 19-aspect customer sentiment extraction |
 | **Backend** | Python + FastAPI + Uvicorn + Pydantic v2 + SQLAlchemy |
 | **Frontend** | React 19 + Vite + Plus Jakarta Sans typography |
 | **Styling** | Custom warm editorial CSS design system (responsive cards, comparison tables, category chips) |
@@ -187,7 +187,8 @@ SmartPick/
 │   └── pipeline/
 │       ├── product_images.py            # High-performance Parquet image lookup
 │       ├── retrieval.py                 # ProductRetriever class (optimized title search)
-│       └── sentiment_analysis.py        # Review sentiment processing
+│       ├── sentiment_full.py            # Review-level sentiment processing (VADER)
+│       └── aggregate_sentiment.py       # Product-level aspect sentiment aggregation
 ├── frontend/
 │   ├── index.html                       # HTML entry point with SmartPick favicon & typography
 │   ├── package.json                     # Vite & test scripts
@@ -276,7 +277,11 @@ DATABASE_URL=postgresql://user:password@ep-example.neon.tech/smartpick?sslmode=r
 # Authentication & JWT
 JWT_SECRET_KEY=your_32_byte_jwt_secret_key_here
 JWT_ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=1440
+ACCESS_TOKEN_EXPIRE_MINUTES=15
+
+# CORS & Rate Limiting
+CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+RATE_LIMIT_ENABLED=true
 
 # Brevo Transactional Email Service
 BREVO_API_KEY=your_brevo_api_key_here
@@ -284,11 +289,12 @@ BREVO_SENDER_EMAIL=noreply@smartpick.ai
 BREVO_SENDER_NAME=SmartPick
 ```
 
-### 3. Install Frontend Dependencies
+### 3. Install Frontend Dependencies & Configure API URL
 
 ```bash
 cd frontend
 npm install
+# Optionally copy .env.example -> .env and set VITE_API_BASE_URL for production builds
 cd ..
 ```
 
@@ -430,14 +436,14 @@ curl -X POST http://127.0.0.1:8000/recommend \
 
 SmartPick includes comprehensive automated test suites for both backend and frontend.
 
-### 1. Backend Test Suite (146 Tests)
+### 1. Backend Test Suite (150 Tests)
 
 ```bash
 # Run the complete pytest suite
 .venv\Scripts\python.exe -m pytest tests
 ```
 
-* **146 passed in ~18 seconds** (100% pass rate)
+* **150 passed** (100% pass rate)
 * Covers authentication, Brevo email verification workflows, database isolation, retrieval regression, category constraint rules, image fallback resolution, LangGraph routing, Gemini quota retry reliability, and product comparison tables.
 
 ### 2. Frontend Test Suite
@@ -457,22 +463,16 @@ cd frontend
 npm run build
 ```
 
-* Compiles with TypeScript check and Vite production bundling (`0 errors`).
+* Compiles with Vite production bundling (`0 errors`).
 
 ---
 
-## User Personas (Personalization Demo)
+## User Memory & Isolation (Guest vs. Authenticated)
 
-SmartPick supports dynamic user preference profiles:
+SmartPick supports two runtime modes:
 
-| Persona ID | Label | Behavioral Bias |
-|---|---|---|
-| `anonymous` | **Standard Search** | Neutral baseline (no personalization applied) |
-| `budget_conscious` | **Budget Conscious** | Strong preference for maximum value and lower price tiers |
-| `camera_focused` | **Quality & Optics** | Prioritizes build quality, premium optics, and top sentiment |
-| `samsung_loyalist` | **Brand Loyalist** | Prioritizes preferred brand affinity |
-
-When logged in via Neon PostgreSQL, user preferences adapt dynamically to previous searches and interactions with strict multi-user data isolation.
+- **Guest (`anonymous`)**: Neutral baseline recommendations without persistent memory or database writes.
+- **Authenticated User (Neon PostgreSQL)**: Preferences (`preferred_categories`, `preferred_brands`, `excluded_brands`, `typical_budget_min/max`, `recurring_quality_tags`) and `conversation_memory` (with automatic credential/OTP redaction) are dynamically learned and strictly isolated per verified user ID.
 
 ---
 

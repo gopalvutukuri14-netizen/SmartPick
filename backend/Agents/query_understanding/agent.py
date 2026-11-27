@@ -264,15 +264,101 @@ USER QUERY:
                 ),
             )
 
-        response = call_with_retry(_call, context="QueryUnderstandingAgent")
+        try:
+            response = call_with_retry(_call, context="QueryUnderstandingAgent")
+        except Exception as exc:
+            fallback = self._conservative_fallback_understand(query)
+            if fallback is not None:
+                return fallback
+            raise RuntimeError(
+                "AI query understanding service is temporarily unavailable."
+            ) from exc
 
         if response.parsed is None:
+            fallback = self._conservative_fallback_understand(query)
+            if fallback is not None:
+                return fallback
             raise RuntimeError(
                 "Gemini returned no parsed QueryUnderstanding. "
                 "The model response was empty or could not be deserialized."
             )
 
         return response.parsed
+
+    @staticmethod
+    def _conservative_fallback_understand(query: str) -> QueryUnderstanding | None:
+        """
+        Conservative deterministic fallback when Gemini is temporarily unavailable.
+        Only handles clearly recognizable greetings, comparisons, or supported categories
+        with explicit budgets; never fabricates specs or unknown intent.
+        """
+        import re
+        from .schema import Intent, RetailCategory, BrandPreferences, ProductSpecs
+
+        text = (query or "").strip()
+        lower = text.casefold()
+        if not lower:
+            return None
+
+        if re.fullmatch(r"(hi|hello|hey|bye|goodbye|thanks|thank you)[!. ]*", lower) or (
+            re.match(r"^(hi|hello|hey)\b", lower)
+            and any(p in lower for p in ("help me", "what can you do", "who are you", "good products"))
+        ):
+            return QueryUnderstanding(
+                raw_query=text,
+                intent=Intent.GENERAL_QUESTION,
+                brand=BrandPreferences(),
+                specs=ProductSpecs(),
+            )
+
+        if any(kw in lower for kw in ("compare", "comparison", "versus", " vs ")):
+            return QueryUnderstanding(
+                raw_query=text,
+                intent=Intent.COMPARISON,
+                brand=BrandPreferences(),
+                specs=ProductSpecs(),
+            )
+
+        category_rules = [
+            (("phone", "smartphone", "mobile", "iphone", "galaxy"), RetailCategory.CELL_PHONES_AND_ACCESSORIES, "phone"),
+            (("headphone", "headphones", "earbud", "earbuds", "headset", "speaker", "laptop"), RetailCategory.ELECTRONICS, "headphones"),
+            (("cookware", "pan", "pans", "pot", "pots", "blender", "mixer", "kettle"), RetailCategory.HOME_AND_KITCHEN, "cookware set"),
+            (("jacket", "coat", "hoodie", "shirt", "jeans", "dress"), RetailCategory.CLOTHING_SHOES_AND_JEWELRY, "jacket"),
+            (("office chair", "ergonomic chair", "desk chair", "chair", "desk"), RetailCategory.OFFICE_PRODUCTS, "office chair"),
+            (("running shoes", "running shoe", "sneakers", "yoga mat", "dumbbell"), RetailCategory.SPORTS_AND_OUTDOORS, "running shoes"),
+        ]
+
+        matched_category = None
+        matched_type = None
+        for keywords, cat, ptype in category_rules:
+            if any(re.search(rf"\b{re.escape(kw)}\b", lower) for kw in keywords):
+                matched_category = cat
+                matched_type = ptype
+                break
+
+        if matched_category is None:
+            return None
+
+        budget_max = None
+        m_budget = re.search(r"(?:under|below|less than|max|budget)\s*[₹rs.\s]*([\d,]+)", lower)
+        if m_budget:
+            try:
+                budget_max = float(m_budget.group(1).replace(",", ""))
+            except ValueError:
+                budget_max = None
+
+        known_brands = ["Samsung", "Apple", "OnePlus", "Sony", "Bose", "Sennheiser", "JBL", "Nike", "Adidas", "Salomon", "T-fal", "Cuisinart"]
+        preferred_brands = [b for b in known_brands if re.search(rf"\b{re.escape(b.casefold())}\b", lower)]
+
+        return QueryUnderstanding(
+            raw_query=text,
+            intent=Intent.PRODUCT_RECOMMENDATION,
+            category=matched_category,
+            product_type=matched_type,
+            budget_max=budget_max,
+            brand=BrandPreferences(preferred=preferred_brands),
+            specs=ProductSpecs(),
+        )
 
 
 if __name__ == "__main__":

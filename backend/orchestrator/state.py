@@ -38,7 +38,6 @@ class PipelineState(TypedDict, total=False):
     # follow-up/comparison queries can reference them instead of
     # running a fresh retrieval.
     previous_products: list[dict]
-    _fu_future: Optional[object]
 
     # ── Agent outputs (populated as nodes execute) ────────────────
     query_understanding: QueryUnderstanding

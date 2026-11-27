@@ -15,6 +15,8 @@ import time
 import logging
 from typing import Callable, TypeVar
 
+import httpx
+
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
@@ -22,6 +24,7 @@ T = TypeVar("T")
 _MAX_RETRIES = 3
 _QUOTA_BASE_DELAY = 5.0
 _TRANSIENT_BASE_DELAY = 2.0
+_MAX_RETRY_DELAY = 15.0
 
 
 def _extract_retry_delay(exc: Exception) -> float | None:
@@ -29,12 +32,12 @@ def _extract_retry_delay(exc: Exception) -> float | None:
     try:
         delay = getattr(exc, "retry_delay", None)
         if delay is not None:
-            return max(1.0, float(delay))
+            return min(_MAX_RETRY_DELAY, max(1.0, float(delay)))
     except Exception:
         pass
     match = re.search(r"retry_delay\s*\{.*?seconds:\s*(\d+)", str(exc))
     if match:
-        return max(1.0, float(match.group(1)))
+        return min(_MAX_RETRY_DELAY, max(1.0, float(match.group(1))))
     return None
 
 
@@ -43,11 +46,34 @@ def _is_quota_error(exc: Exception) -> bool:
     return "429" in text or "RESOURCE_EXHAUSTED" in text or "QUOTA" in text
 
 
+def _is_non_retryable(exc: Exception) -> bool:
+    if isinstance(exc, ValueError):
+        return True
+    text = str(exc).upper()
+    return any(
+        marker in text
+        for marker in (
+            "400",
+            "401",
+            "403",
+            "404",
+            "INVALID_ARGUMENT",
+            "API_KEY_INVALID",
+            "PERMISSION_DENIED",
+            "UNAUTHENTICATED",
+        )
+    )
+
+
 def _is_retryable(exc: Exception) -> bool:
+    if _is_non_retryable(exc):
+        return False
     if _is_quota_error(exc):
         return True
+    if isinstance(exc, (httpx.TimeoutException, httpx.TransportError, ConnectionError, TimeoutError)):
+        return True
     text = str(exc)
-    return any(code in text for code in ("500", "503", "504"))
+    return any(code in text for code in ("500", "502", "503", "504"))
 
 
 def call_with_retry(fn: Callable[[], T], *, context: str = "") -> T:
@@ -87,8 +113,9 @@ def call_with_retry(fn: Callable[[], T], *, context: str = "") -> T:
                 raise
 
             if _is_quota_error(exc):
-                delay = _extract_retry_delay(exc) or (
-                    _QUOTA_BASE_DELAY * (2 ** attempt)
+                delay = _extract_retry_delay(exc) or min(
+                    _MAX_RETRY_DELAY,
+                    _QUOTA_BASE_DELAY * (2 ** attempt),
                 )
                 logger.warning(
                     "[%s] Quota/rate-limit error (attempt %d/%d). Retrying in %.1f s.",
@@ -98,7 +125,7 @@ def call_with_retry(fn: Callable[[], T], *, context: str = "") -> T:
                     delay,
                 )
             else:
-                delay = _TRANSIENT_BASE_DELAY * (2 ** attempt)
+                delay = min(_MAX_RETRY_DELAY, _TRANSIENT_BASE_DELAY * (2 ** attempt))
                 logger.warning(
                     "[%s] Transient error (attempt %d/%d). Retrying in %.1f s: %s",
                     context or "gemini",

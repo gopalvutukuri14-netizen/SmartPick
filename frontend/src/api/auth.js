@@ -1,4 +1,5 @@
-const API_BASE = "http://localhost:8000";
+import { buildApiUrl } from "./config";
+
 const TOKEN_KEY = "smartpick_access_token";
 
 export function getStoredToken() {
@@ -30,7 +31,7 @@ export function removeStoredToken() {
 }
 
 async function request(endpoint, options = {}) {
-  const url = `${API_BASE}${endpoint}`;
+  const url = buildApiUrl(endpoint);
   const headers = {
     "Content-Type": "application/json",
     ...(options.headers || {}),
@@ -44,7 +45,7 @@ async function request(endpoint, options = {}) {
     });
   } catch (netErr) {
     throw new Error(
-      "Unable to connect to SmartPick authentication server. Please ensure the backend is running on port 8000."
+      "Unable to connect to SmartPick authentication server. Please check your network or ensure the backend server is running."
     );
   }
 

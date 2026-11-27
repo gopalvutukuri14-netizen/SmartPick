@@ -1,6 +1,5 @@
 import { getStoredToken } from "./auth";
-
-const API_BASE = "http://localhost:8000";
+import { buildApiUrl } from "./config";
 
 /**
  * Call the SmartPick recommendation pipeline.
@@ -47,14 +46,14 @@ export async function getRecommendations(
 
   let response;
   try {
-    response = await fetch(`${API_BASE}/recommend`, {
+    response = await fetch(buildApiUrl("/recommend"), {
       method: "POST",
       headers,
       body: JSON.stringify(body),
     });
   } catch (netErr) {
     throw new Error(
-      "Unable to connect to SmartPick recommendation server. Please check your network or ensure the backend is running on port 8000."
+      "Unable to connect to SmartPick recommendation server. Please check your network or ensure the backend server is running."
     );
   }
 

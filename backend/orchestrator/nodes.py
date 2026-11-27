@@ -12,7 +12,6 @@ Expensive resources are initialized lazily and reused.
 import os
 import logging
 import time
-import concurrent.futures
 
 from dotenv import load_dotenv
 from google import genai
@@ -45,8 +44,6 @@ from .state import PipelineState
 load_dotenv()
 
 logger = logging.getLogger(__name__)
-
-_thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
 
 # ================================================================
@@ -310,16 +307,7 @@ def ranking_node(state: PipelineState) -> dict:
     dur_ms = (time.perf_counter() - t0) * 1000
     logger.info("stage=ranking duration_ms=%.1f ranked=%d", dur_ms, len(result.products))
 
-    # Pre-launch Follow-up Agent concurrently while XAI Agent generates explanations
-    fu_future = None
-    if result.products:
-        fu_future = _thread_pool.submit(
-            _get_followup_agent().suggest,
-            state["query_understanding"],
-            result,
-        )
-
-    return {"ranking_result": result, "_fu_future": fu_future}
+    return {"ranking_result": result}
 
 
 # ================================================================
@@ -349,24 +337,11 @@ def xai_node(state: PipelineState) -> dict:
 def followup_node(state: PipelineState) -> dict:
     """Generate useful next-step suggestions based on recommendations."""
     t0 = time.perf_counter()
-    fu_future = state.get("_fu_future")
-
-    if fu_future:
-        try:
-            result = fu_future.result(timeout=25.0)
-        except Exception as exc:
-            logger.warning("Concurrent follow-up retrieval failed, falling back to sync: %s", exc)
-            agent = _get_followup_agent()
-            result = agent.suggest(
-                state["query_understanding"],
-                state["ranking_result"],
-            )
-    else:
-        agent = _get_followup_agent()
-        result = agent.suggest(
-            state["query_understanding"],
-            state["ranking_result"],
-        )
+    agent = _get_followup_agent()
+    result = agent.suggest(
+        state["query_understanding"],
+        state["ranking_result"],
+    )
 
     dur_ms = (time.perf_counter() - t0) * 1000
     logger.info("stage=follow_up duration_ms=%.1f suggestions=%d", dur_ms, len(result.suggestions))

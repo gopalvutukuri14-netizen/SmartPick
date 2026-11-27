@@ -300,34 +300,14 @@ class RetrievalAgent:
             })
 
         if query.brand.preferred:
-            preferred = {
-                brand.strip().casefold()
-                for brand in query.brand.preferred
-                if brand and brand.strip()
-            }
-
-            variants = {
-                "samsung": ["Samsung", "SAMSUNG"],
-            }
-
-            expanded = set()
-
-            for brand in preferred:
-                expanded.update(
-                    variants.get(brand, [brand])
-                )
-
-            conditions.append({
-                "brand": {"$in": sorted(expanded)}
-            })
+            expanded = self._expand_brand_variants(query.brand.preferred)
+            if expanded:
+                conditions.append({
+                    "brand": {"$in": expanded}
+                })
 
         if query.brand.excluded:
-            excluded = [
-                brand.strip()
-                for brand in query.brand.excluded
-                if brand and brand.strip()
-            ]
-
+            excluded = self._expand_brand_variants(query.brand.excluded)
             if excluded:
                 conditions.append({
                     "brand": {"$nin": excluded}
@@ -340,6 +320,29 @@ class RetrievalAgent:
             return conditions[0]
 
         return {"$and": conditions}
+
+    @staticmethod
+    def _expand_brand_variants(brands: list[str]) -> list[str]:
+        """
+        Expand exact brand names into common catalog capitalization variants
+        (e.g., 'sony' -> ['Sony', 'SONY', 'sony']) without broadening to
+        unrelated brands or scanning the full catalog.
+        """
+        expanded: set[str] = set()
+        for raw in brands:
+            if not raw or not raw.strip():
+                continue
+            cleaned = raw.strip()
+            expanded.add(cleaned)
+            expanded.add(cleaned.lower())
+            expanded.add(cleaned.upper())
+            expanded.add(cleaned.title())
+            expanded.add(cleaned.capitalize())
+            if "-" in cleaned:
+                parts = cleaned.split("-")
+                expanded.add("-".join(p.capitalize() for p in parts))
+                expanded.add(parts[0].upper() + "-" + "-".join(p.lower() for p in parts[1:]))
+        return sorted(expanded)
 
     @staticmethod
     def _contains_phrase(text: str, phrase: str) -> bool:

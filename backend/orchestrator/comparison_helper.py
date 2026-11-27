@@ -197,15 +197,26 @@ def build_category_comparison_data(
     cat_norm = (category or "").casefold()
     if "phone" in cat_norm:
         rows.append(ComparisonRow(
-            aspect="RAM & Storage",
-            product_a=f"{specs_a.get('RAM', 'Not specified')} / {specs_a.get('Storage', 'Not specified')}" if (specs_a.get('RAM') or specs_a.get('Storage')) else "Not available in catalog",
-            product_b=f"{specs_b.get('RAM', 'Not specified')} / {specs_b.get('Storage', 'Not specified')}" if (specs_b.get('RAM') or specs_b.get('Storage')) else "Not available in catalog",
+            aspect="RAM",
+            product_a=specs_a.get("RAM", "Not available in catalog"),
+            product_b=specs_b.get("RAM", "Not available in catalog"),
         ))
         rows.append(ComparisonRow(
-            aspect="Battery & Display",
-            product_a=f"{specs_a.get('Battery', 'Not specified')} / {specs_a.get('Display', 'Not specified')}" if (specs_a.get('Battery') or specs_a.get('Display')) else "Not available in catalog",
-            product_b=f"{specs_b.get('Battery', 'Not specified')} / {specs_b.get('Display', 'Not specified')}" if (specs_b.get('Battery') or specs_b.get('Display')) else "Not available in catalog",
+            aspect="Storage",
+            product_a=specs_a.get("Storage", "Not available in catalog"),
+            product_b=specs_b.get("Storage", "Not available in catalog"),
         ))
+        rows.append(ComparisonRow(
+            aspect="Battery",
+            product_a=specs_a.get("Battery", "Not available in catalog"),
+            product_b=specs_b.get("Battery", "Not available in catalog"),
+        ))
+        if specs_a.get("Display") or specs_b.get("Display"):
+            rows.append(ComparisonRow(
+                aspect="Display",
+                product_a=specs_a.get("Display", "Not available in catalog"),
+                product_b=specs_b.get("Display", "Not available in catalog"),
+            ))
     elif "electron" in cat_norm or "headphone" in cat_norm:
         rows.append(ComparisonRow(
             aspect="Connectivity & Audio",

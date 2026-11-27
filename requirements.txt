@@ -25,11 +25,11 @@ langgraph
 chromadb
 FlagEmbedding
 
-# --- Data processing & Parquet catalog storage ---
+# --- Data processing, sentiment & Parquet catalog storage ---
 pandas
 numpy
-nltk
 pyarrow
+vaderSentiment==3.3.2
 
 # --- Testing & HTTP client ---
 pytest

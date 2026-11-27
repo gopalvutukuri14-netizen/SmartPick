@@ -1,11 +1,17 @@
 import logging
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from backend.database.session import get_db
 from backend.database.models import User, OTPChallenge, UserPreference
+from backend.rate_limit import (
+    auth_account_limit_per_min,
+    auth_ip_limit_per_min,
+    enforce_rate_limit,
+    get_client_ip,
+)
 from .schemas import (
     SignupRequest,
     VerifyEmailRequest,
@@ -38,7 +44,10 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
 @router.post("/signup", status_code=status.HTTP_201_CREATED)
-def signup(req: SignupRequest, db: Session = Depends(get_db)):
+def signup(req: SignupRequest, http_request: Request, db: Session = Depends(get_db)):
+    client_ip = get_client_ip(http_request)
+    enforce_rate_limit(scope="auth_signup_ip", identifier=client_ip, limit=auth_ip_limit_per_min(), window_seconds=60)
+    enforce_rate_limit(scope="auth_signup_acct", identifier=req.email.strip().lower(), limit=auth_account_limit_per_min(), window_seconds=60)
     if req.password != req.confirm_password:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -253,7 +262,10 @@ def verify_email(req: VerifyEmailRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/resend-otp")
-def resend_otp(req: ResendOtpRequest, db: Session = Depends(get_db)):
+def resend_otp(req: ResendOtpRequest, http_request: Request, db: Session = Depends(get_db)):
+    client_ip = get_client_ip(http_request)
+    enforce_rate_limit(scope="auth_resend_ip", identifier=client_ip, limit=auth_ip_limit_per_min(), window_seconds=60)
+    enforce_rate_limit(scope="auth_resend_acct", identifier=req.email.strip().lower(), limit=auth_account_limit_per_min(), window_seconds=60)
     if req.purpose not in ("signup_verify", "password_reset"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -336,7 +348,10 @@ def resend_otp(req: ResendOtpRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(req: LoginRequest, db: Session = Depends(get_db)):
+def login(req: LoginRequest, http_request: Request, db: Session = Depends(get_db)):
+    client_ip = get_client_ip(http_request)
+    enforce_rate_limit(scope="auth_login_ip", identifier=client_ip, limit=auth_ip_limit_per_min(), window_seconds=60)
+    enforce_rate_limit(scope="auth_login_acct", identifier=req.username_or_email.strip().lower(), limit=auth_account_limit_per_min(), window_seconds=60)
     user = (
         db.query(User)
         .filter((User.username == req.username_or_email) | (User.email == req.username_or_email))
@@ -381,7 +396,10 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/forgot-password")
-def forgot_password(req: ForgotPasswordRequest, db: Session = Depends(get_db)):
+def forgot_password(req: ForgotPasswordRequest, http_request: Request, db: Session = Depends(get_db)):
+    client_ip = get_client_ip(http_request)
+    enforce_rate_limit(scope="auth_forgot_ip", identifier=client_ip, limit=auth_ip_limit_per_min(), window_seconds=60)
+    enforce_rate_limit(scope="auth_forgot_acct", identifier=req.email_or_username.strip().lower(), limit=auth_account_limit_per_min(), window_seconds=60)
     user = (
         db.query(User)
         .filter((User.username == req.email_or_username) | (User.email == req.email_or_username))
